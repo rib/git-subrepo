@@ -114,7 +114,8 @@ main() {
 
   # Run the command:
   if $all_wanted; then
-    local args=( "${command_arguments[@]}" )
+    local args
+    args=( "${command_arguments[@]}" )
     get-all-subrepos
     for subdir in ${subrepos[*]}; do
       subrepo_remote=
@@ -254,12 +255,12 @@ command:status() {
 }
 
 status-refs() {
-  local output=
+  local output= sha1= type= ref=
   while read line; do
     [[ "$line" =~ ^([0-9a-f]+)\ refs/subrepo/$subdir/([a-z]+) ]] || continue
-    local sha1="$(git rev-parse --short "${BASH_REMATCH[1]}")"
-    local type="${BASH_REMATCH[2]}"
-    local ref="refs/subrepo/$subdir/$type"
+    sha1="$(git rev-parse --short "${BASH_REMATCH[1]}")"
+    type="${BASH_REMATCH[2]}"
+    ref="refs/subrepo/$subdir/$type"
     if [ "$type" == branch ]; then
       output+="    Branch Ref:    $sha1 ($ref)"$'\n'
     elif [ "$type" == commit ]; then
@@ -450,6 +451,7 @@ subrepo:push() {
 
 # Fetch the subrepo's remote branch content:
 subrepo:fetch() {
+  local output=
   o "Fetch '$subrepo_remote' ($subrepo_branch)"
   RUN git fetch --quiet "$subrepo_remote" "$subrepo_branch"
 
@@ -457,7 +459,7 @@ subrepo:fetch() {
   OUT=true RUN git rev-parse FETCH_HEAD
   upstream_head_commit="$output"
 
-  local output=$(git config "remote.subrepo/$subdir.url")
+  output=$(git config "remote.subrepo/$subdir.url")
   if [ -z "$output" ]; then
     o "Create subrepo remote 'subrepo/$subdir' -> '$subrepo_remote'."
     RUN git remote add "subrepo/$subdir" "$subrepo_remote"
@@ -474,13 +476,14 @@ subrepo:fetch() {
 
 # Create a subrepo branch of changes since last pull:
 subrepo:branch() {
-  local branch="${1:-"subrepo/$subdir"}"
+  local branch= count= prev_pull_commit=
+  branch="${1:-"subrepo/$subdir"}"
   o "Check if the '$branch' branch already exists."
   git:branch-exists "$branch" && return
 
   o "Make sure there is at least one commit after the last pull."
   # (That translates to 2 commits after the parent of last pull):
-  local count="$(git rev-list "$subrepo_parent"..HEAD -2 | grep -c $'\n')"
+  count="$(git rev-list "$subrepo_parent"..HEAD -2 | grep -c $'\n')"
   if [ "$count" != 2 ]; then
     OK=false; CODE=-1; return
   fi
@@ -497,7 +500,7 @@ subrepo:branch() {
     HEAD
 
   o "Make sure there are *subrepo* commits after the last pull."
-  local count="$(git rev-list HEAD -2 | grep -c $'\n')"
+  count="$(git rev-list HEAD -2 | grep -c $'\n')"
   if [ "$count" != 2 ]; then
     # Reset to the branch where we started:
     RUN git reset --hard "$original_head_commit"
@@ -507,7 +510,7 @@ subrepo:branch() {
 
   # Now we can get rid of the previous pull commit.
   # First get the final commit, which is the last pull one:
-  local prev_pull_commit="$(git rev-list HEAD | tail -1)"
+  prev_pull_commit="$(git rev-list HEAD | tail -1)"
   [ -n "$prev_pull_commit" ] ||
     die "Can't find previous clone/pull commit."
 
@@ -529,12 +532,13 @@ subrepo:branch() {
 
 # Commit a merged subrepo branch:
 subrepo:commit() {
+  local upstream= indexfile=
   o "Check that '$subrepo_commit_ref' exists"
   git:rev-exists "$subrepo_commit_ref" ||
     error "Commit ref '$subrepo_commit_ref' does not exist."
 
   if ! "$force_wanted"; then
-    local upstream="$upstream_head_commit"
+    upstream="$upstream_head_commit"
     o "Make sure '$subrepo_commit_ref' contains the upstream HEAD."
     if ! git:commit-in-rev-list "$upstream" "$subrepo_commit_ref"; then
       error \
@@ -558,7 +562,7 @@ subrepo:commit() {
     RUN git reset --mixed
     # index currently considers $subdir content as deleted at root.
     o "Delete the index."
-    local indexfile="${GIT_INDEX_FILE:-$(git rev-parse --git-dir)/index}"
+    indexfile="${GIT_INDEX_FILE:-$(git rev-parse --git-dir)/index}"
     RUN rm -f "$indexfile"
   fi
 
@@ -1027,7 +1031,8 @@ assert-subdir-empty() {
 # Find all the current subrepos by looking for all the subdirectories that
 # contain a `.gitrepo` file.
 get-all-subrepos() {
-  local paths=($(
+  local paths=() path=
+  paths=($(
     find . -name '.gitrepo' |
       grep -v '/.git/' |
       grep '/.gitrepo$' |
@@ -1035,7 +1040,6 @@ get-all-subrepos() {
       sort
   ))
   subrepos=()
-  local path
   for path in "${paths[@]}"; do
     add-subrepo "$path"
   done
@@ -1050,16 +1054,17 @@ add-subrepo() {
 
 # Determine the upstream's default head branch:
 get-upstream-head-branch() {
+  local remotes= commit= branch=
   OUT=true RUN git ls-remote $subrepo_remote
-  local remotes="$output"
+  remotes="$output"
   [ -n "$remotes" ] ||
     error "Failed to 'git ls-remote $subrepo_remote'."
-  local commit="$(
+  commit="$(
     echo "$remotes" |
     grep HEAD |
     cut -f1
   )"
-  local branch="$(
+  branch="$(
     echo "$remotes" |
     grep "$commit" |
     grep -v HEAD |
@@ -1073,20 +1078,21 @@ get-upstream-head-branch() {
 
 # Commit msg for an action commit:
 get-commit-message() {
-  local commit="$(git rev-parse --short "$upstream_head_commit")"
-  local args=()
+  local commit= args=() command_remote= command_commit= merged=
+  commit="$(git rev-parse --short "$upstream_head_commit")"
+  args=()
   if $all_wanted; then
     args+=("$subdir")
   fi
   args+=(${commit_msg_args[@]})
 
   # Find the specific git-subrepo code used:
-  local command_remote='???'
-  local command_commit='???'
+  command_remote='???'
+  command_commit='???'
   get-command-info
 
   OUT=true RUN git rev-parse --short "$subrepo_commit_ref"
-  local merged="$output"
+  merged="$output"
 
   # Format subrepo commit message:
   cat <<...
@@ -1110,9 +1116,10 @@ git-subrepo:
 # info goes into commit messages, so we can find out exactly how the commits
 # were done.
 get-command-info() {
-  local bin="$0"
+  local bin= lib= remote= commit=
+  bin="$0"
   if [[ "$bin" =~ / ]]; then
-    local lib="$(dirname "$bin")"
+    lib="$(dirname "$bin")"
     # XXX Makefile needs to install these symlinks:
     # If `git-subrepo` was system-installed (`make install`):
     if [ -e "$lib/git-subrepo.d/upstream" ] &&
@@ -1122,7 +1129,7 @@ get-command-info() {
     elif [[ "$lib" =~ / ]]; then
       lib="$(dirname "$lib")"
       if [ -d "$lib/.git" ]; then
-        local remote="$(
+        remote="$(
           GIT_DIR=$lib/.git git remote -v |
             grep '^origin' |
             head -n1 |
@@ -1132,7 +1139,7 @@ get-command-info() {
         if [ -n "$remote" ]; then
           command_remote="$remote"
         else
-          local remote="$(
+          remote="$(
             GIT_DIR=$lib/.git git remote -v |
               head -n1 |
               cut -f2 |
@@ -1142,7 +1149,7 @@ get-command-info() {
             command_remote="$remote"
           fi
         fi
-        local commit="$(GIT_DIR="$lib/.git" git rev-parse --short HEAD)"
+        commit="$(GIT_DIR="$lib/.git" git rev-parse --short HEAD)"
         if [ -n "$commit" ]; then
           command_commit="$commit"
         fi
@@ -1211,7 +1218,8 @@ git:ref-exists() {
 
 git:get-head-branch-name() {
   output=
-  local name="$(git symbolic-ref --short --quiet HEAD)"
+  local name=
+  name="$(git symbolic-ref --short --quiet HEAD)"
   [ "$name" == HEAD ] && return
   output="$name"
 }
@@ -1221,14 +1229,16 @@ git:get-head-branch-commit() {
 }
 
 git:commit-in-rev-list() {
-  local commit="$1"
-  local list_head="$2"
+  local commit= list_head=
+  commit="$1"
+  list_head="$2"
   git rev-list "$list_head" | grep -q "^$commit"
 }
 
 git:make-ref() {
-  local ref_name="$1"
-  local commit="$(git rev-parse "$2")"
+  local ref_name= commit=
+  ref_name="$1"
+  commit="$(git rev-parse "$2")"
   git update-ref "$ref_name" "$commit"
 }
 

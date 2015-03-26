@@ -45,7 +45,7 @@ subrepo-clone-bar-into-foo() {
 }
 
 add-new-files() {
-  local file
+  local file=
   for file in $*; do
     echo "new file $file" > "$file"
     git add "$file"
@@ -54,7 +54,7 @@ add-new-files() {
 }
 
 modify-files() {
-  local file
+  local file=
   for file in $*; do
     echo 'a new line' >> "$file"
     git add "$file"
@@ -132,7 +132,8 @@ assert-original-state() {
 }
 
 catch() {
-  local error="$("$@" 2>&1 || true)"
+  local error=
+  error="$("$@" 2>&1 || true)"
   echo "$error"
 }
 
