@@ -243,6 +243,11 @@ command:branch() {
     error "Branch '$branch' already exists. Use '--force' to override."
   fi
 
+  local rebase_tmp_branch="subrepo/$subdir"
+  if git:branch-exists "$branch"; then
+    error "Leftover '$rebase_tmp_branch' from previous subrepo branch found. Use '--force' to override."
+  fi
+
   # Create the subrepo branch:
   subrepo:branch
   if ! OK; then
@@ -572,53 +577,45 @@ subrepo:branch() {
   o "Check if the '$branch' branch already exists."
   git:branch-exists "$branch" && return
 
+  local rebase_tmp_branch="${branch}-rebase-tmp"
+  o "Check if the '$rebase_tmp_branch' branch already exists."
+  git:branch-exists "$rebase_tmp_branch" && return
+
   o "Make sure there is at least one commit after the last pull."
   # (That translates to 2 commits after the parent of last pull):
   local count="$(git rev-list "$subrepo_parent"..HEAD -2 | grep -c $'\n')"
   if [ "$count" != 2 ]; then
     OK=false; CODE=-2; return
-  fi
-
-  o "Remove the commits before last pull."
-  FAIL=false RUN git filter-branch --force \
-    --parent-filter "grep -v $subrepo_parent || true" \
-    -- "$subrepo_parent"..HEAD
-
-  # Note: We need to have the last pull commit or this next step can fail.
-  o "Get commits specific to the subdir."
-  FAIL=false RUN git filter-branch -f \
-    --subdirectory-filter "$subdir" \
-    HEAD
-
-  o "Make sure there are *subrepo* commits after the last pull."
-  local count="$(git rev-list HEAD -2 | grep -c $'\n')"
-  if [ "$count" != 2 ]; then
-    # Reset to the branch where we started:
-    RUN git reset --hard "$original_head_commit"
-    OK=false
     return
   fi
 
-  # Now we can get rid of the previous pull commit.
-  # First get the final commit, which is the last pull one:
-  local prev_pull_commit="$(git rev-list HEAD | tail -1)"
-  [ -n "$prev_pull_commit" ] ||
-    die "Can't find previous clone/pull commit."
+  local subrepo_squash=$(git rev-list "$subrepo_parent"..HEAD|tail -1)
 
-  o "Remove the previous pull commit."
-  FAIL=false RUN git filter-branch --force \
-    --parent-filter "grep -v $prev_pull_commit || true" \
-    -- "$prev_pull_commit"..HEAD
+  o "Create a temporary branch to rebase onto"
+  RUN git checkout -b "$rebase_tmp_branch" "$subrepo_squash"
 
-  o "Remove the .gitrepo file from the history."
-  RUN git filter-branch -f \
-    --tree-filter "rm -f .gitrepo"
+  o "Reset temporary rebase branch to upstream HEAD from previous clone/pull"
+  RUN git reset --soft "$subrepo_commit"
 
-  o "Create branch '$branch' for this new commit set."
-  RUN git branch "$branch"
+  o "Squash commit representing diff between upstream $subrepo HEAD and $original_head_branch"
+  RUN git commit -m "git subrepo: temporary rebase parent"
 
-  o "Reset to the '$original_head_branch' branch."
-  RUN git reset --hard "$original_head_commit"
+  o "Create $branch based on $original_head_branch"
+  RUN git checkout -b $branch "$original_head_commit"
+
+  o "Rebase $original_head_branch onto $rebase_tmp_branch, from $subrepo_squash"
+  RUN git rebase --onto "$rebase_tmp_branch" "$subrepo_squash"
+
+  o "Delete temporary rebase branch"
+  RUN git branch -D "$rebase_tmp_branch"
+
+  o "Apply subdirectory filter on rebased commits"
+  RUN git filter-branch -f --subdirectory-filter "$subdir" "$subrepo_commit"..HEAD
+  o "Filter out .gitrepo (all that's left of temporary squash commit)"
+  RUN git filter-branch -f --tree-filter "rm -f .gitrepo" --prune-empty "$subrepo_commit"..HEAD
+
+  o "Finished; switching back to $original_head_branch"
+  RUN git checkout $original_head_branch
 }
 
 # Commit a merged subrepo branch:
