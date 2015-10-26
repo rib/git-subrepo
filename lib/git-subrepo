@@ -88,7 +88,6 @@ main() {
   local subrepo_branch=         # Upstream branch to clone/push/pull
   local subrepo_upstream=       # Upstream HEAD from previous clone/pull
   local subrepo_parent=         # Local commit from before previous clone/pull
-  local subrepo_former=         # A retired gitrepo key that might still exist
 
   local refs_subrepo_branch=    # A subrepo ref -> commit of branch command
   local refs_subrepo_upstream=  # A subrepo ref -> commit last merged
@@ -735,10 +734,6 @@ subrepo:status() {
       echo "  Pulled Commit:   $(git rev-parse --short $subrepo_upstream)"
     if [ -n "$subrepo_parent" ]; then
       echo "  Pull Parent:     $(git rev-parse --short $subrepo_parent)"
-    # TODO Remove this eventually:
-    elif [ -n "$subrepo_former" ]; then
-      printf "  Former Commit:   $(git rev-parse --short $subrepo_former)"
-      echo " *** DEPRECATED ***"
     fi
 
     if "$verbose_wanted"; then
@@ -993,11 +988,6 @@ read-gitrepo-file() {
   FAIL=false \
   SAY=false OUT=true RUN git config --file="$gitrepo" subrepo.parent
   subrepo_parent="$output"
-
-  if [ -z "$subrepo_parent" ]; then
-    SAY=false OUT=true RUN git config --file="$gitrepo" subrepo.former
-    subrepo_former="$output"
-  fi
 }
 
 # Update the subdir/.gitrepo state file:
