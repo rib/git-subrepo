@@ -87,7 +87,7 @@ main() {
   local subrepo_remote=         # Remote url for subrepo's upstream repo
   local subrepo_branch=         # Upstream branch to clone/push/pull
   local subrepo_upstream=       # Upstream HEAD from previous clone/pull
-  local subrepo_parent=         # Local commit from before previous clone/pull
+  local subrepo_commit=         # Local commit from before previous clone/pull
 
   local refs_subrepo_branch=    # A subrepo ref -> commit of branch command
   local refs_subrepo_upstream=  # A subrepo ref -> commit last merged
@@ -580,30 +580,27 @@ subrepo:branch() {
   o "Check if the '$rebase_tmp_branch' branch already exists."
   git:branch-exists "$rebase_tmp_branch" && return
 
-  o "Make sure there is at least one commit after the last pull."
-  # (That translates to 2 commits after the parent of last pull):
-  local count="$(git rev-list "$subrepo_parent"..HEAD -2 | grep -c $'\n')"
-  if [ "$count" != 2 ]; then
+  o "Make sure there is at least one commit after the last squash commit."
+  local count="$(git rev-list "$subrepo_commit"..HEAD -1 "$subdir"| grep -c $'\n')"
+  if [ "$count" != 1 ]; then
     OK=false; CODE=-2; return
     return
   fi
 
-  local subrepo_squash=$(git rev-list "$subrepo_parent"..HEAD|tail -1)
-
   o "Create a temporary branch to rebase onto"
-  RUN git checkout -b "$rebase_tmp_branch" "$subrepo_squash"
+  RUN git checkout -b "$rebase_tmp_branch" "$subrepo_commit"
 
   o "Reset temporary rebase branch to upstream HEAD from previous clone/pull"
   RUN git reset --soft "$subrepo_upstream"
 
-  o "Squash commit representing diff between upstream $subrepo HEAD and $original_head_branch"
-  RUN git commit -m "git subrepo: temporary rebase parent"
+  o "Squash commit representing diff between upstream $subrepo HEAD and local squash commit"
+  RUN git commit -m "conflated git subrepo squash commit changes"
 
   o "Create $branch based on $original_head_branch"
   RUN git checkout -b $branch "$original_head_commit"
 
-  o "Rebase $original_head_branch onto $rebase_tmp_branch, from $subrepo_squash"
-  RUN git rebase --onto "$rebase_tmp_branch" "$subrepo_squash"
+  o "Rebase $original_head_branch onto $rebase_tmp_branch, from $subrepo_commit"
+  RUN git rebase --onto "$rebase_tmp_branch" "$subrepo_commit"
 
   o "Delete temporary rebase branch"
   RUN git branch -D "$rebase_tmp_branch"
@@ -725,15 +722,15 @@ subrepo:status() {
     local remote="subrepo/$subdir"
     FAIL=false OUT=true RUN git config "remote.$remote.url"
     [ -n "$output" ] &&
-      echo "  Remote Name:     subrepo/$subdir"
-    echo "  Remote URL:      $subrepo_remote"
+      echo "  Remote Name:             subrepo/$subdir"
+    echo "  Remote URL:              $subrepo_remote"
+    echo "  Tracking Branch:         $subrepo_branch"
     [ -n "$upstream_head_commit" ] &&
-      echo "  Upstream Ref:    $upstream_head_commit"
-    echo "  Tracking Branch: $subrepo_branch"
+      echo "  Latest Upstream:         $upstream_head_commit"
     [ -z "$subrepo_upstream" ] ||
-      echo "  Pulled Commit:   $(git rev-parse --short $subrepo_upstream)"
-    if [ -n "$subrepo_parent" ]; then
-      echo "  Pull Parent:     $(git rev-parse --short $subrepo_parent)"
+      echo "  Last Squashed Upstream:  $(git rev-parse --short $subrepo_upstream)"
+    if [ -n "$subrepo_commit" ]; then
+      echo "  Last Squash Commit:      $(git rev-parse --short $subrepo_commit)"
     fi
 
     if "$verbose_wanted"; then
@@ -986,8 +983,8 @@ read-gitrepo-file() {
   subrepo_upstream="$output"
 
   FAIL=false \
-  SAY=false OUT=true RUN git config --file="$gitrepo" subrepo.parent
-  subrepo_parent="$output"
+  SAY=false OUT=true RUN git rev-list HEAD -1 "$gitrepo"
+  subrepo_commit="$output"
 }
 
 # Update the subdir/.gitrepo state file:
@@ -1016,7 +1013,11 @@ update-gitrepo-file() {
   fi
 
   RUN git config --file="$gitrepo" subrepo.commit "$upstream_head_commit"
-  RUN git config --file="$gitrepo" subrepo.parent "$original_head_commit"
+
+  # XXX: this just ensures the .gitrepo file changes so we can
+  # rely on the rev-list for .gitrepo to identify subrepo commits...
+  RUN git config --file="$gitrepo" subrepo.unique-hash "$original_head_commit"
+
   RUN git config --file="$gitrepo" subrepo.cmdver "$VERSION"
 }
 
