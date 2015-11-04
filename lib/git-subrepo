@@ -631,41 +631,25 @@ subrepo:commit() {
 
   o "Remove old content of the subdir."
   (
-    cd "./$subdir"
-    RUN rm -fr $(ls -A)
+    if test -d "./$subdir"; then
+      RUN git rm -fr --ignore-unmatch "./$subdir"
+      RUN rm -fr "./$subdir"
+      RUN mkdir "./$subdir"
+    fi
   )
 
-  o "Put remote subrepo content into '$subdir/'."
-  GIT_WORK_TREE="$subdir" RUN git reset --hard "$subrepo_upstream_ref"
-
-  o "Reset index to original commit."
-  if [ "$original_head_commit" != none ]; then
-    RUN git reset --mixed "$original_head_commit"
-  else
-    RUN git reset --mixed
-    # index currently considers $subdir content as deleted at root.
-    o "Delete the index."
-    local indexfile="${GIT_INDEX_FILE:-$(git rev-parse --git-dir)/index}"
-    RUN rm -f "$indexfile"
-  fi
+  o "Index remote subrepo content into '$subdir/'."
+  RUN git read-tree --prefix="$subdir/" "$subrepo_upstream_ref"
 
   o "Put info into '$subdir/.gitrepo' file."
   update-gitrepo-file
 
-  o "Add '$subdir/' content to the index."
-  RUN git add -A "$subdir"
-
-  o "Commit to the '$original_head_branch' branch."
-  if [ "$original_head_commit" != none ]; then
-    RUN git commit -m "$(get-commit-message)"
-  else
-    # We had cloned into an empty repo, side effect of prior git reset --mixed
-    # command is that subrepo's history is now part of the index. Commit
-    # without that history.
-    OUT=true RUN git write-tree
-    OUT=true RUN git commit-tree -m "$(get-commit-message)" "$output"
-    RUN git reset --hard "$output"
-  fi
+  o "Commit latest $subdir content."
+  RUN git add "$subdir/.gitrepo"
+  RUN git commit -m "$(get-commit-message)"
+  
+  o "Checkout latest $subdir content."
+  RUN git checkout "$subdir"
 
   o "Create ref '$refs_subrepo_upstream'."
   git:make-ref "$refs_subrepo_upstream" "$subrepo_upstream_ref"
